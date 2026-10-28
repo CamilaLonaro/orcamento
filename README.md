@@ -27,5 +27,5 @@ App de orçamento pessoal (web e celular) publicado no **GitHub Pages**, com os 
 ## Arquivos
 - `index.html`, `app.js`: o app (telas do handoff "design_handoff_app_orcamento")
 - `config.js`: endereço e chave pública do Supabase
-- `supabase.js`: biblioteca oficial do Supabase (v2.45.4), embutida no projeto
+- `supabase.js`: biblioteca oficial do Supabase (v2.100.0), embutida no projeto
 - `supabase/schema.sql`: tabela e regras de segurança
