@@ -34,7 +34,7 @@
     cats: [], orc: {}, hist: {}, lanc: [], metas: [], aportes: [], config: {},
     aba: 'home', mes: mesAtual(), ocultar: false, catAberta: null, filtro: 'all', txAberta: null,
     folha: false, r: null, tentou: false, metaForm: false, ocupado: false,
-    bancos: {}, bancosForm: false, sincronizando: false,
+    imp: null,
   };
   const COLECOES = ['categorias', 'orcamentos', 'historico', 'lancamentos', 'metas', 'aportes', 'config'];
 
@@ -204,7 +204,7 @@
         <span class="titulo">Transações</span>
         ${seletorMes()}
       </div>
-      ${painelBancos()}
+      ${painelImportar()}
       <div class="chips" role="tablist">
         ${opcoes.map(f => `<button class="chip ${S.filtro === f.id ? 'on' : ''}" data-a="filtro" data-f="${esc(f.id)}">${esc(f.nome)}</button>`).join('')}
       </div>
@@ -261,65 +261,217 @@
     </div>`;
   }
 
-  // ---------- Bancos (Open Finance via Pluggy) ----------
-  function painelBancos() {
-    const b = S.bancos || {};
-    const n = (b.itens || []).length;
-    const ult = b.ultimaSync ? new Date(b.ultimaSync) : null;
-    const quando = ult ? `${dataCurta(iso(ult))}, ${pad(ult.getHours())}:${pad(ult.getMinutes())}` : 'nunca';
-    const resumo = b.ultimoResumo?.contas?.length ? b.ultimoResumo.contas.map(c => esc(c.nome)).join(', ') : '';
-    if (S.bancosForm || !n) {
-      return `<form class="meta-card" id="form-bancos" autocomplete="off" style="gap:12px">
-        <span style="font-size:16px;font-weight:600">Bancos e cartões</span>
-        <span class="sub" style="font-size:13px">Cole os <strong>Item IDs</strong> do MeuPluggy, um por linha (um por banco). Os gastos passam a entrar sozinhos, sem duplicar o pagamento da fatura.</span>
-        <textarea class="campo" id="bc-itens" rows="3" placeholder="Item ID do Bradesco&#10;Item ID do Nubank&#10;…" style="resize:vertical;font-family:inherit">${esc((b.itens || []).join('\n'))}</textarea>
-        <label class="sub" style="font-size:13px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">Trazer transações a partir de
-          <input class="campo" id="bc-desde" type="date" value="${esc(b.desde || '2026-11-01')}" style="width:auto;padding:10px 12px">
-        </label>
-        <div style="display:flex;gap:8px;justify-content:flex-end">
-          ${n ? '<button type="button" class="btn-sec" data-a="bancos-cancelar">Cancelar</button>' : ''}
-          <button type="submit" class="btn-aporte" style="background:var(--coral);color:#fff">Salvar e sincronizar</button>
-        </div>
-      </form>`;
+  // ---------- Importar extratos e faturas (OFX / CSV) ----------
+  const BANCOS = ['Bradesco', 'Nubank', 'Mercado Pago', 'Unicred', 'Santander', 'BV', 'Banco do Brasil', 'Amex', 'Outro'];
+  const semAcento = t => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+  function fnv(str) { let h = 0x811c9dc5; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(36); }
+  function numeroBR(v) {
+    let t = String(v ?? '').replace(/R\$|\s/g, '');
+    if (!t) return NaN;
+    const neg = /^\(.*\)$/.test(t) || /-$/.test(t);
+    t = t.replace(/[()]/g, '').replace(/-$/, '');
+    if (t.includes(',')) t = t.replace(/\./g, '').replace(',', '.');
+    const n = parseFloat(t);
+    return neg ? -Math.abs(n) : n;
+  }
+  function dataBR(v) {
+    const t = String(v || '').trim();
+    let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(t); if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+    m = /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})/.exec(t);
+    if (m) { const y = m[3].length === 2 ? '20' + m[3] : m[3]; return `${y}-${pad(+m[2])}-${pad(+m[1])}`; }
+    m = /^(\d{4})(\d{2})(\d{2})/.exec(t); if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+    return null;
+  }
+  function adivinharBanco(texto) {
+    const t = semAcento(texto);
+    if (/nubank|nu pagamentos|nu financeira/.test(t)) return 'Nubank';
+    if (/mercado ?pago|mercadopago/.test(t)) return 'Mercado Pago';
+    if (/american express|amex/.test(t)) return 'Amex';
+    if (/bradesco/.test(t)) return 'Bradesco';
+    if (/santander/.test(t)) return 'Santander';
+    if (/unicred/.test(t)) return 'Unicred';
+    if (/banco do brasil|\bbb\b/.test(t)) return 'Banco do Brasil';
+    if (/\bbv\b|votorantim/.test(t)) return 'BV';
+    return '';
+  }
+  function lerOFX(txt) {
+    const blocos = txt.split(/<STMTTRN>/i).slice(1);
+    const tag = (b, n) => { const m = new RegExp('<' + n + '>([^<\\r\\n]*)', 'i').exec(b); return m ? m[1].trim() : ''; };
+    const itens = blocos.map(b => {
+      b = b.split(/<\/STMTTRN>/i)[0];
+      return { id: tag(b, 'FITID'), data: dataBR(tag(b, 'DTPOSTED')), descricao: tag(b, 'MEMO') || tag(b, 'NAME') || 'Sem descrição', valor: numeroBR(tag(b, 'TRNAMT')) };
+    }).filter(x => x.data && isFinite(x.valor) && x.valor !== 0);
+    const org = (/<ORG>([^<\r\n]+)/i.exec(txt) || [])[1] || '';
+    return { itens, cartao: /<CCSTMTRS>/i.test(txt), banco: adivinharBanco(org) };
+  }
+  function lerCSV(txt) {
+    const linhas = txt.replace(/^﻿/, '').split(/\r?\n/).filter(l => l.trim());
+    if (linhas.length < 2) return { itens: [] };
+    // procura a linha de cabeçalho (alguns bancos põem informações antes)
+    let hi = linhas.findIndex(l => /data|date|release_date/i.test(l) && /valor|amount|net_amount|d[eé]bito|cr[eé]dito/i.test(l));
+    if (hi < 0) hi = 0;
+    const cab = linhas[hi];
+    const sep = (cab.match(/;/g) || []).length >= (cab.match(/,/g) || []).length ? ';' : ((cab.match(/\t/g) || []).length > 1 ? '\t' : ',');
+    const campos = l => { const out = []; let cur = '', q = false; for (const ch of l) { if (ch === '"') q = !q; else if (ch === sep && !q) { out.push(cur); cur = ''; } else cur += ch; } out.push(cur); return out.map(x => x.trim()); };
+    const h = campos(cab).map(semAcento);
+    const acha = re => h.findIndex(x => re.test(x));
+    const iData = acha(/^(data|date|data (de )?lancamento|data da transacao|release_date|dt|data mov)/);
+    const iDesc = acha(/^(descricao|title|historico|lancamento|estabelecimento|transaction_type|descricao da transacao|detalhe|memo|nome)/);
+    const iValor = acha(/^(valor|amount|valor \(r\$\)|valor em r\$|transaction_net_amount|valor r\$)/);
+    const iDeb = acha(/^debito/), iCred = acha(/^credito/);
+    if (iData < 0 || (iValor < 0 && iDeb < 0 && iCred < 0)) return { itens: [], erro: 'Não reconheci as colunas de data e valor deste CSV.' };
+    const itens = linhas.slice(hi + 1).map(l => {
+      const c = campos(l);
+      let valor = iValor >= 0 ? numeroBR(c[iValor]) : (numeroBR(c[iCred]) || 0) - Math.abs(numeroBR(c[iDeb]) || 0);
+      return { data: dataBR(c[iData]), descricao: (iDesc >= 0 ? c[iDesc] : '') || 'Sem descrição', valor };
+    }).filter(x => x.data && isFinite(x.valor) && x.valor !== 0);
+    // CSV de fatura do Nubank: date,title,amount (compras positivas)
+    const cartao = h.includes('title') && h.includes('amount') ? true : undefined;
+    return { itens, cartao };
+  }
+  function categoriaPorTexto(t) {
+    const s = semAcento(t);
+    if (/luz|energia|enel|eletropaulo|vivo|telefon|internet|condom|aluguel|sabesp|comgas|\bgas\b/.test(s)) return 'casa';
+    if (/combust|posto|shell|ipiranga|ipva|seguro auto|veicul|byd|estacion|pedagio|sem parar|uber|\b99\b/.test(s)) return 'carros';
+    if (/farmac|drogari|drogasil|raia|saude|hospital|clinic|laborat|care plus|unimed|amil|odonto/.test(s)) return 'saude';
+    if (/fies|escola|colegio|curso|faculdade|universidad|educa/.test(s)) return 'educacao';
+    if (/emprest|consign|portoseg|juros|iof|financiam/.test(s)) return 'emprestimos';
+    return 'outros';
+  }
+  const ehFatura = t => /pagamento.*fatura|pgto.*fatura|pag(amento|to)? cart|fatura cart|pagamento recebido|pagto cartao|pag fat/.test(semAcento(t));
+  const ehTransfPropria = t => /mesma titularidade|entre contas|transf.*propria|resgate|aplicacao|aplic\b|poupanca/.test(semAcento(t));
+
+  function classificar() {
+    const imp = S.imp; const ids = new Set(S.lanc.map(l => l.id));
+    const vistos = {};
+    let sinalCompra = -1;
+    if (imp.tipo === 'cartao') {
+      const pos = imp.bruto.filter(x => x.valor > 0).length, neg = imp.bruto.length - pos;
+      sinalCompra = pos >= neg ? 1 : -1;
     }
+    imp.itens = imp.bruto.map(x => {
+      const base = `${imp.banco}|${imp.tipo}|${x.data}|${x.valor}|${x.descricao}`;
+      vistos[base] = (vistos[base] || 0) + 1;
+      const chave = 'ex-' + fnv(x.id ? `${imp.banco}|${x.id}` : `${base}|${vistos[base]}`);
+      const it = { chave, data: x.data, descricao: x.descricao, valor: Math.round(Math.abs(x.valor) * 100), status: 'novo', motivo: '' };
+      if (imp.tipo === 'cartao') {
+        if (Math.sign(x.valor) !== sinalCompra || ehFatura(x.descricao)) { it.status = 'ignorado'; it.motivo = 'pagamento ou estorno da fatura'; }
+        it.tipo = 'despesa'; it.categoria = 'cartoes';
+      } else {
+        it.tipo = x.valor < 0 ? 'despesa' : 'receita';
+        it.categoria = it.tipo === 'despesa' ? categoriaPorTexto(x.descricao) : null;
+        if (ehFatura(x.descricao)) { it.status = 'ignorado'; it.motivo = 'pagamento de fatura (as compras vêm do cartão)'; }
+        else if (ehTransfPropria(x.descricao)) { it.status = 'ignorado'; it.motivo = 'transferência entre contas suas ou investimento'; }
+      }
+      if (it.status === 'novo' && ids.has(chave)) it.status = 'existe';
+      const anterior = imp.escolhas?.[chave];
+      if (anterior) Object.assign(it, anterior);
+      return it;
+    }).sort((a, b) => (a.data < b.data ? 1 : -1));
+  }
+
+  async function abrirImportacao(arquivo) {
+    try {
+      const buf = await arquivo.arrayBuffer();
+      let txt = new TextDecoder('utf-8').decode(buf);
+      if (txt.includes('�')) txt = new TextDecoder('iso-8859-1').decode(buf);
+      const ofx = /<OFX>|OFXHEADER/i.test(txt);
+      const r = ofx ? lerOFX(txt) : lerCSV(txt);
+      if (r.erro) { aviso(r.erro); return; }
+      if (!r.itens.length) { aviso('Não encontrei lançamentos neste arquivo. Use o extrato em OFX ou CSV.'); return; }
+      const banco = r.banco || adivinharBanco(arquivo.name) || 'Outro';
+      S.imp = { arquivo: arquivo.name, banco, tipo: r.cartao ? 'cartao' : 'conta', bruto: r.itens, itens: [], escolhas: {} };
+      classificar();
+      renderImportacao();
+    } catch (e) { aviso('Não consegui ler o arquivo: ' + e.message); }
+  }
+
+  function painelImportar() {
     return `<div class="mini" style="flex-direction:row;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
       <span style="display:flex;flex-direction:column;gap:2px;min-width:0">
-        <span style="font-size:14px;font-weight:600">${n} banco${n > 1 ? 's' : ''} conectado${n > 1 ? 's' : ''}</span>
-        <span style="font-size:12px;color:var(--cinza)">Última sincronização: ${quando}${resumo ? ' · ' + resumo : ''}</span>
+        <span style="font-size:14px;font-weight:600">Importar extrato ou fatura</span>
+        <span style="font-size:12px;color:var(--cinza)">Arquivo OFX ou CSV baixado no app do banco. Não duplica nada.</span>
       </span>
-      <span style="display:flex;gap:8px">
-        <button class="btn-sec" data-a="bancos-editar">Configurar</button>
-        <button class="btn-aporte" data-a="bancos-sync" ${S.sincronizando ? 'disabled' : ''}>${S.sincronizando ? 'Sincronizando…' : 'Sincronizar agora'}</button>
-      </span>
+      <label class="btn-aporte" style="cursor:pointer;display:inline-flex;align-items:center">Escolher arquivo
+        <input type="file" id="imp-extrato" accept=".ofx,.qfx,.csv,.txt,text/csv" hidden>
+      </label>
     </div>`;
   }
-  async function salvarBancos(e) {
-    e.preventDefault();
-    const itens = document.getElementById('bc-itens').value.split(/[\s,;]+/).map(x => x.trim()).filter(Boolean);
-    const desde = document.getElementById('bc-desde').value || '2026-11-01';
-    if (!itens.length) { aviso('Cole pelo menos um Item ID.'); return; }
-    try {
-      await S.db.doc('config/bancos').set({ ...(S.bancos || {}), itens, desde });
-      S.bancosForm = false; render();
-      sincronizarBancos(false);
-    } catch (err) { aviso(msgErro(err)); }
+
+  const impRoot = document.createElement('div'); document.body.appendChild(impRoot);
+  function renderImportacao() {
+    const imp = S.imp;
+    if (!imp) { impRoot.innerHTML = ''; return; }
+    const novos = imp.itens.filter(i => i.status === 'novo');
+    const existentes = imp.itens.filter(i => i.status === 'existe').length;
+    const ignorados = imp.itens.filter(i => i.status === 'ignorado').length;
+    const total = novos.reduce((a, i) => a + (i.tipo === 'despesa' ? i.valor : 0), 0);
+    const opcCat = sel => S.cats.map(c => `<option value="${esc(c.slug)}" ${c.slug === sel ? 'selected' : ''}>${esc(c.nome)}</option>`).join('');
+    impRoot.innerHTML = `
+      <div class="overlay" data-a="imp-fechar"></div>
+      <div class="folha larga" role="dialog" aria-modal="true" aria-label="Importar extrato">
+        <span class="alca"></span>
+        <div class="entre" style="align-items:center;gap:12px;flex-wrap:wrap">
+          <span style="font-size:17px;font-weight:600">Importar ${esc(imp.arquivo)}</span>
+          <div class="seg">
+            <button type="button" class="${imp.tipo === 'conta' ? 'on' : ''}" data-a="imp-tipo" data-t="conta">Conta corrente</button>
+            <button type="button" class="${imp.tipo === 'cartao' ? 'on' : ''}" data-a="imp-tipo" data-t="cartao">Cartão de crédito</button>
+          </div>
+        </div>
+        <label class="sub" style="font-size:13px;display:flex;align-items:center;gap:10px">Banco
+          <select class="campo" id="imp-banco" style="width:auto;padding:10px 12px">${BANCOS.map(b => `<option ${b === imp.banco ? 'selected' : ''}>${b}</option>`).join('')}</select>
+        </label>
+        <div class="grid2" style="grid-template-columns:repeat(3,1fr)">
+          <div class="mini"><span style="font-size:12px;color:var(--cinza)">Novos</span><span class="num" style="font-size:18px;font-weight:600">${novos.length}</span></div>
+          <div class="mini"><span style="font-size:12px;color:var(--cinza)">Já importados</span><span class="num" style="font-size:18px;font-weight:600">${existentes}</span></div>
+          <div class="mini"><span style="font-size:12px;color:var(--cinza)">Ignorados</span><span class="num" style="font-size:18px;font-weight:600">${ignorados}</span></div>
+        </div>
+        <div style="display:flex;flex-direction:column;max-height:42vh;overflow:auto;border-top:1px solid var(--linha)">
+          ${imp.itens.map(i => `
+            <div class="lanc" style="opacity:${i.status === 'novo' ? 1 : .5}">
+              <span class="txt">
+                <span class="desc">${esc(i.descricao)}</span>
+                <span class="meta">${dataCurta(i.data)}${i.status === 'existe' ? ' · já importado' : i.status === 'ignorado' ? ' · ignorado: ' + esc(i.motivo) : ''}</span>
+              </span>
+              ${i.status === 'novo' && i.tipo === 'despesa' ? `<select class="campo" data-imp-cat="${i.chave}" style="width:auto;padding:6px 8px;font-size:13px">${opcCat(i.categoria)}</select>` : ''}
+              <span class="v num" style="color:${i.tipo === 'receita' ? 'var(--verde)' : 'var(--tinta)'}">${i.tipo === 'receita' ? '+ ' : '− '}${brl(i.valor)}</span>
+            </div>`).join('')}
+        </div>
+        <span class="sub" style="font-size:13px">${novos.length ? `Vão entrar ${novos.length} lançamento${novos.length > 1 ? 's' : ''}${total ? `, ${brl(total)} em despesas` : ''}.` : 'Nada novo para importar neste arquivo.'}</span>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn-sec" data-a="imp-fechar">Cancelar</button>
+          <button class="salvar ${novos.length ? 'ok' : ''}" style="padding:12px 18px;font-size:15px" data-a="imp-confirmar" ${novos.length ? '' : 'disabled'}>Importar ${novos.length || ''}</button>
+        </div>
+      </div>`;
+    impRoot.querySelector('#imp-banco').addEventListener('change', e => { imp.banco = e.target.value; classificar(); renderImportacao(); });
+    impRoot.querySelectorAll('[data-imp-cat]').forEach(el => el.addEventListener('change', e => {
+      const ch = el.dataset.impCat; imp.escolhas[ch] = { categoria: e.target.value };
+      const it = imp.itens.find(x => x.chave === ch); if (it) it.categoria = e.target.value;
+    }));
   }
-  async function sincronizarBancos(silencioso) {
-    if (S.sincronizando || typeof SB === 'undefined' || !SB) return;
-    S.sincronizando = true; if (S.aba === 'tx') render();
+
+  async function confirmarImportacao() {
+    const imp = S.imp; if (!imp || S.ocupado) return;
+    const novos = imp.itens.filter(i => i.status === 'novo');
+    if (!novos.length) return;
+    S.ocupado = true;
     try {
-      const { data, error } = await SB.functions.invoke('pluggy-sync', { body: {} });
-      if (error) {
-        let msg = error.message;
-        try { const corpo = await error.context?.json?.(); if (corpo?.erro) msg = corpo.erro; } catch {}
-        throw new Error(msg);
+      const agora = Date.now();
+      const linhas = novos.map(i => ({
+        user_id: S.usuario.id, colecao: 'lancamentos', doc_id: i.chave,
+        dados: { data: i.data, descricao: i.descricao, valor: i.valor, tipo: i.tipo, categoria: i.categoria, origem: 'extrato', conta: imp.banco, criadoEm: agora },
+      }));
+      for (let k = 0; k < linhas.length; k += 200) {
+        const { error } = await SB.from('docs').upsert(linhas.slice(k, k + 200), { onConflict: 'user_id,colecao,doc_id', ignoreDuplicates: true });
+        if (error) throw new Error(error.message);
       }
-      if (data?.erro) throw new Error(data.erro);
       await S.db.carregarTudo();
-      if (!silencioso || data.inseridos) aviso(data.inseridos ? `${data.inseridos} lançamento${data.inseridos > 1 ? 's' : ''} novo${data.inseridos > 1 ? 's' : ''} dos bancos.` : 'Bancos sincronizados. Nada novo.');
-    } catch (err) {
-      if (!silencioso) aviso('Não consegui sincronizar: ' + err.message);
-    } finally { S.sincronizando = false; if (S.aba === 'tx') render(); }
+      const meses = novos.map(i => i.data.slice(0, 7)).sort();
+      S.mes = meses[meses.length - 1];
+      S.imp = null; renderImportacao(); render();
+      aviso(`${novos.length} lançamento${novos.length > 1 ? 's' : ''} importado${novos.length > 1 ? 's' : ''} de ${imp.banco}.`);
+    } catch (e) { aviso('Não consegui importar: ' + e.message); }
+    finally { S.ocupado = false; }
   }
 
   // ---------- Tab bar ----------
@@ -351,7 +503,7 @@
     }
     main.innerHTML = S.aba === 'home' ? telaInicio() : S.aba === 'budget' ? telaOrcamento() : S.aba === 'tx' ? telaTransacoes() : telaMetas();
     if (S.metaForm) document.getElementById('form-meta')?.addEventListener('submit', criarMeta);
-    document.getElementById('form-bancos')?.addEventListener('submit', salvarBancos);
+    document.getElementById('imp-extrato')?.addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) abrirImportacao(f); });
   }
 
   // ---------- Folha "Novo lançamento" ----------
@@ -507,9 +659,9 @@
     else if (a === 'aporte') aportar(el.dataset.id);
     else if (a === 'meta-nova') { S.metaForm = true; render(); setTimeout(() => document.getElementById('meta-nome')?.focus(), 30); }
     else if (a === 'meta-cancelar') { S.metaForm = false; render(); }
-    else if (a === 'bancos-editar') { S.bancosForm = true; render(); }
-    else if (a === 'bancos-cancelar') { S.bancosForm = false; render(); }
-    else if (a === 'bancos-sync') sincronizarBancos(false);
+    else if (a === 'imp-fechar') { S.imp = null; renderImportacao(); }
+    else if (a === 'imp-tipo') { S.imp.tipo = el.dataset.t; S.imp.escolhas = {}; classificar(); renderImportacao(); }
+    else if (a === 'imp-confirmar') confirmarImportacao();
     else if (a === 'novo') abrirFolha();
     else if (a === 'fechar') fecharFolha();
     else if (a === 'tipo') { S.r.tipo = el.dataset.t; renderFolha(); }
@@ -740,18 +892,15 @@
     db.collection('metas').onSnapshot(s => { S.metas = lista(s).sort((a, b) => (a.criadoEm || 0) - (b.criadoEm || 0)); pronto('metas'); });
     db.collection('aportes').onSnapshot(s => { S.aportes = lista(s); pronto('aportes'); });
     db.doc('config/geral').onSnapshot(s => { S.config = s.exists ? s.data() : {}; pronto('config'); });
-    let primeiraLeituraBancos = true;
-    db.doc('config/bancos').onSnapshot(s => {
-      S.bancos = s.exists ? s.data() : {};
-      if (S.estado === 'pronto') render();
-      if (primeiraLeituraBancos) {
-        primeiraLeituraBancos = false;
-        const ult = S.bancos.ultimaSync ? Date.parse(S.bancos.ultimaSync) : 0;
-        if ((S.bancos.itens || []).length && Date.now() - ult > 6 * 3600_000) sincronizarBancos(true);
-      }
-    });
   }
   document.addEventListener('click', e => { if (e.target.closest('[data-a="sair"]')) sair(); });
+  // Arrastar um extrato para qualquer lugar da página também importa
+  document.addEventListener('dragover', e => { if (S.estado === 'pronto') e.preventDefault(); });
+  document.addEventListener('drop', e => {
+    if (S.estado !== 'pronto') return;
+    e.preventDefault();
+    const f = e.dataTransfer?.files?.[0]; if (f) abrirImportacao(f);
+  });
 
   renderTabbar();
   document.getElementById('tabbar').hidden = true;
