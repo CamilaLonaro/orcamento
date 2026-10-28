@@ -116,6 +116,7 @@
         </div>
         <button class="pill" data-a="ocultar">${S.ocultar ? 'Mostrar valores' : 'Ocultar valores'}</button>
       </div>
+      <div class="home-cols"><div class="home-a">
       <div class="saldo">
         <span style="font-size:13px;color:var(--pessego)">${rotuloSaldo}</span>
         <span class="valor num" style="color:${r.restante < 0 ? 'var(--pessego)' : 'var(--papel)'}">${m0(Math.abs(r.restante))}</span>
@@ -139,10 +140,12 @@
           </button>`;
         }).join('')}
       </div>` : ''}
+      </div><div class="home-b">
       <div style="display:flex;flex-direction:column;gap:4px">
         <div class="entre" style="align-items:baseline"><span class="rotulo">Recentes</span><button class="link" data-a="aba" data-aba="tx">Ver tudo</button></div>
         ${recentes.length ? recentes.map(t => linha(t, true)).join('') : '<span class="vazio">Nenhum lançamento neste mês ainda. Toque em + para lançar.</span>'}
       </div>
+      </div></div>
     </div>`;
   }
 
@@ -160,7 +163,7 @@
         ${r.cats.filter(c => c.l > 0).map(c => `<div style="background:${C(c.hue)};flex:${c.l}"></div>`).join('')}
         <div style="background:var(--areia);flex:${naoDist}"></div>
       </div>
-      <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="cats-grid">
         ${r.cats.map(c => {
           const cor = C(c.hue);
           const stCor = c.semLimite ? 'var(--cinza)' : c.passou ? 'var(--verm)' : c.p >= r.limiar ? 'var(--ambar)' : 'var(--cinza)';
@@ -223,6 +226,7 @@
         <span class="titulo" style="padding-top:0">Metas</span>
         <span class="sub">${m0(total)} guardados no total.</span>
       </div>
+      <div class="metas-grid">
       ${S.metas.map(g => {
         const sv = guardado(g.id), p = g.alvo > 0 ? sv / g.alvo : 0;
         return `<div class="meta-card">
@@ -237,6 +241,7 @@
           </div>
         </div>`;
       }).join('')}
+      </div>
       ${!S.metas.length && !S.metaForm ? '<span class="vazio" style="text-align:left;padding:0">Você ainda não tem metas. Crie uma para acompanhar quanto já guardou para ela.</span>' : ''}
       ${S.metaForm ? `
       <form class="meta-card" id="form-meta" autocomplete="off">
@@ -264,8 +269,8 @@
   const ROT = { home: 'Início', budget: 'Orçamento', tx: 'Transações', goals: 'Metas' };
   function renderTabbar() {
     const tab = k => `<button class="tab ${S.aba === k ? 'on' : ''}" data-a="aba" data-aba="${k}" ${S.aba === k ? 'aria-current="page"' : ''}><svg viewBox="0 0 24 24" aria-hidden="true">${ICONES[k]}</svg>${ROT[k]}</button>`;
-    document.getElementById('tabbar').innerHTML = tab('home') + tab('budget') +
-      `<button class="mais" data-a="novo" aria-label="Novo lançamento" ${S.estado === 'pronto' ? '' : 'disabled'}>+</button>` + tab('tx') + tab('goals');
+    document.getElementById('tabbar').innerHTML = '<span class="marca">Orçamento 2026</span>' + tab('home') + tab('budget') +
+      `<button class="mais" data-a="novo" aria-label="Novo lançamento" ${S.estado === 'pronto' ? '' : 'disabled'}><span class="mais-icone">+</span><span class="mais-txt">Novo lançamento</span></button>` + tab('tx') + tab('goals');
   }
 
   // ---------- Render ----------
