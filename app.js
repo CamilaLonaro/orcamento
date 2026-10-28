@@ -34,13 +34,14 @@
     cats: [], orc: {}, hist: {}, lanc: [], metas: [], aportes: [], config: {},
     aba: 'home', mes: mesAtual(), ocultar: false, catAberta: null, filtro: 'all', txAberta: null,
     folha: false, r: null, tentou: false, metaForm: false, ocupado: false,
+    bancos: {}, bancosForm: false, sincronizando: false,
   };
   const COLECOES = ['categorias', 'orcamentos', 'historico', 'lancamentos', 'metas', 'aportes', 'config'];
 
   // ---------- Cálculos (regras do handoff) ----------
   function itensDoMes(m) {
     const h = (S.hist[m]?.itens || []).map((x, i) => ({ ...x, fonte: 'hist', ord: -i }));
-    const a = S.lanc.filter(l => (l.data || '').startsWith(m)).map(l => ({ ...l, fonte: 'app', ord: l.criadoEm || 0 }));
+    const a = S.lanc.filter(l => !l.oculto && (l.data || '').startsWith(m)).map(l => ({ ...l, fonte: 'app', ord: l.criadoEm || 0 }));
     return [...h, ...a].sort((x, y) => (x.data < y.data ? 1 : x.data > y.data ? -1 : y.ord - x.ord));
   }
   function calc(m) {
@@ -91,7 +92,7 @@
     return `
       <${tag} class="lanc" ${S.aba === 'tx' ? `data-a="tx" data-id="${esc(t.fonte + ':' + t.id)}" aria-expanded="${aberta}"` : ''}>
         <span class="av" style="background:${T(hue)};color:${C(hue)}">${esc((t.descricao || '?').charAt(0))}</span>
-        <span class="txt"><span class="desc">${esc(t.descricao)}</span><span class="meta">${esc(nomeCat)}${comData ? ' · ' + dataCurta(t.data) : ''}</span></span>
+        <span class="txt"><span class="desc">${esc(t.descricao)}</span><span class="meta">${esc(nomeCat)}${t.conta ? ' · ' + esc(t.conta) : ''}${comData ? ' · ' + dataCurta(t.data) : ''}</span></span>
         <span class="v num" style="color:${rec ? 'var(--verde)' : 'var(--tinta)'}">${rec ? '+ ' : '− '}${mC(t.valor)}</span>
       </${tag}>
       ${aberta ? `<div class="acoes"><button class="btn-sec" data-a="tx-cancelar">Cancelar</button><button class="btn-perigo" data-a="tx-excluir" data-id="${esc(t.fonte + ':' + t.id)}">Excluir lançamento</button></div>` : ''}`;
@@ -203,6 +204,7 @@
         <span class="titulo">Transações</span>
         ${seletorMes()}
       </div>
+      ${painelBancos()}
       <div class="chips" role="tablist">
         ${opcoes.map(f => `<button class="chip ${S.filtro === f.id ? 'on' : ''}" data-a="filtro" data-f="${esc(f.id)}">${esc(f.nome)}</button>`).join('')}
       </div>
@@ -259,6 +261,67 @@
     </div>`;
   }
 
+  // ---------- Bancos (Open Finance via Pluggy) ----------
+  function painelBancos() {
+    const b = S.bancos || {};
+    const n = (b.itens || []).length;
+    const ult = b.ultimaSync ? new Date(b.ultimaSync) : null;
+    const quando = ult ? `${dataCurta(iso(ult))}, ${pad(ult.getHours())}:${pad(ult.getMinutes())}` : 'nunca';
+    const resumo = b.ultimoResumo?.contas?.length ? b.ultimoResumo.contas.map(c => esc(c.nome)).join(', ') : '';
+    if (S.bancosForm || !n) {
+      return `<form class="meta-card" id="form-bancos" autocomplete="off" style="gap:12px">
+        <span style="font-size:16px;font-weight:600">Bancos e cartões</span>
+        <span class="sub" style="font-size:13px">Cole os <strong>Item IDs</strong> do MeuPluggy, um por linha (um por banco). Os gastos passam a entrar sozinhos, sem duplicar o pagamento da fatura.</span>
+        <textarea class="campo" id="bc-itens" rows="3" placeholder="Item ID do Bradesco&#10;Item ID do Nubank&#10;…" style="resize:vertical;font-family:inherit">${esc((b.itens || []).join('\n'))}</textarea>
+        <label class="sub" style="font-size:13px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">Trazer transações a partir de
+          <input class="campo" id="bc-desde" type="date" value="${esc(b.desde || '2026-11-01')}" style="width:auto;padding:10px 12px">
+        </label>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          ${n ? '<button type="button" class="btn-sec" data-a="bancos-cancelar">Cancelar</button>' : ''}
+          <button type="submit" class="btn-aporte" style="background:var(--coral);color:#fff">Salvar e sincronizar</button>
+        </div>
+      </form>`;
+    }
+    return `<div class="mini" style="flex-direction:row;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <span style="display:flex;flex-direction:column;gap:2px;min-width:0">
+        <span style="font-size:14px;font-weight:600">${n} banco${n > 1 ? 's' : ''} conectado${n > 1 ? 's' : ''}</span>
+        <span style="font-size:12px;color:var(--cinza)">Última sincronização: ${quando}${resumo ? ' · ' + resumo : ''}</span>
+      </span>
+      <span style="display:flex;gap:8px">
+        <button class="btn-sec" data-a="bancos-editar">Configurar</button>
+        <button class="btn-aporte" data-a="bancos-sync" ${S.sincronizando ? 'disabled' : ''}>${S.sincronizando ? 'Sincronizando…' : 'Sincronizar agora'}</button>
+      </span>
+    </div>`;
+  }
+  async function salvarBancos(e) {
+    e.preventDefault();
+    const itens = document.getElementById('bc-itens').value.split(/[\s,;]+/).map(x => x.trim()).filter(Boolean);
+    const desde = document.getElementById('bc-desde').value || '2026-11-01';
+    if (!itens.length) { aviso('Cole pelo menos um Item ID.'); return; }
+    try {
+      await S.db.doc('config/bancos').set({ ...(S.bancos || {}), itens, desde });
+      S.bancosForm = false; render();
+      sincronizarBancos(false);
+    } catch (err) { aviso(msgErro(err)); }
+  }
+  async function sincronizarBancos(silencioso) {
+    if (S.sincronizando || typeof SB === 'undefined' || !SB) return;
+    S.sincronizando = true; if (S.aba === 'tx') render();
+    try {
+      const { data, error } = await SB.functions.invoke('pluggy-sync', { body: {} });
+      if (error) {
+        let msg = error.message;
+        try { const corpo = await error.context?.json?.(); if (corpo?.erro) msg = corpo.erro; } catch {}
+        throw new Error(msg);
+      }
+      if (data?.erro) throw new Error(data.erro);
+      await S.db.carregarTudo();
+      if (!silencioso || data.inseridos) aviso(data.inseridos ? `${data.inseridos} lançamento${data.inseridos > 1 ? 's' : ''} novo${data.inseridos > 1 ? 's' : ''} dos bancos.` : 'Bancos sincronizados. Nada novo.');
+    } catch (err) {
+      if (!silencioso) aviso('Não consegui sincronizar: ' + err.message);
+    } finally { S.sincronizando = false; if (S.aba === 'tx') render(); }
+  }
+
   // ---------- Tab bar ----------
   const ICONES = {
     home: '<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
@@ -288,6 +351,7 @@
     }
     main.innerHTML = S.aba === 'home' ? telaInicio() : S.aba === 'budget' ? telaOrcamento() : S.aba === 'tx' ? telaTransacoes() : telaMetas();
     if (S.metaForm) document.getElementById('form-meta')?.addEventListener('submit', criarMeta);
+    document.getElementById('form-bancos')?.addEventListener('submit', salvarBancos);
   }
 
   // ---------- Folha "Novo lançamento" ----------
@@ -394,7 +458,12 @@
     if (S.ocupado) return; S.ocupado = true;
     const [fonte, id] = [chave.slice(0, chave.indexOf(':')), chave.slice(chave.indexOf(':') + 1)];
     try {
-      if (fonte === 'app') await S.db.doc('lancamentos/' + id).delete();
+      if (fonte === 'app') {
+        const l = S.lanc.find(x => x.id === id);
+        // Lançamento que veio do banco: esconde em vez de apagar, para a próxima sincronização não trazê-lo de volta
+        if (l?.origem === 'banco') await S.db.doc('lancamentos/' + id).update({ oculto: true });
+        else await S.db.doc('lancamentos/' + id).delete();
+      }
       else {
         const doc = S.hist[S.mes];
         if (doc) await S.db.doc('historico/' + S.mes).update({ itens: doc.itens.filter(x => x.id !== id) });
@@ -438,6 +507,9 @@
     else if (a === 'aporte') aportar(el.dataset.id);
     else if (a === 'meta-nova') { S.metaForm = true; render(); setTimeout(() => document.getElementById('meta-nome')?.focus(), 30); }
     else if (a === 'meta-cancelar') { S.metaForm = false; render(); }
+    else if (a === 'bancos-editar') { S.bancosForm = true; render(); }
+    else if (a === 'bancos-cancelar') { S.bancosForm = false; render(); }
+    else if (a === 'bancos-sync') sincronizarBancos(false);
     else if (a === 'novo') abrirFolha();
     else if (a === 'fechar') fecharFolha();
     else if (a === 'tipo') { S.r.tipo = el.dataset.t; renderFolha(); }
@@ -668,6 +740,16 @@
     db.collection('metas').onSnapshot(s => { S.metas = lista(s).sort((a, b) => (a.criadoEm || 0) - (b.criadoEm || 0)); pronto('metas'); });
     db.collection('aportes').onSnapshot(s => { S.aportes = lista(s); pronto('aportes'); });
     db.doc('config/geral').onSnapshot(s => { S.config = s.exists ? s.data() : {}; pronto('config'); });
+    let primeiraLeituraBancos = true;
+    db.doc('config/bancos').onSnapshot(s => {
+      S.bancos = s.exists ? s.data() : {};
+      if (S.estado === 'pronto') render();
+      if (primeiraLeituraBancos) {
+        primeiraLeituraBancos = false;
+        const ult = S.bancos.ultimaSync ? Date.parse(S.bancos.ultimaSync) : 0;
+        if ((S.bancos.itens || []).length && Date.now() - ult > 6 * 3600_000) sincronizarBancos(true);
+      }
+    });
   }
   document.addEventListener('click', e => { if (e.target.closest('[data-a="sair"]')) sair(); });
 
