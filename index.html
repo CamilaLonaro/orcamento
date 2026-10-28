@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#F5F1E9">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Orçamento">
+<meta name="robots" content="noindex">
+<title>Orçamento 2026</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Instrument+Serif&display=swap">
+<style>
+/* Layout: coluna de app (max 480px) sobre fundo areia, tab bar fixa no rodapé, folha inferior para lançamentos.
+   Tokens do handoff "design_handoff_app_orcamento" — tema único (claro), por decisão do design. */
+:root {
+  --vinho: #3B1F2B; --vinho2: #512B39;
+  --marfim: #F5F1E9; --areia: #ECE4DA; --papel: #FBF9F5;
+  --pessego: #E8A38B; --coral: #A95443;
+  --tinta: #292321; --cinza: #6B605B; --linha: #D9D0C7; --desab: #B8ADA6;
+  --ambar: oklch(0.52 0.12 70); --verm: oklch(0.5 0.15 30); --verm-barra: oklch(0.58 0.16 30); --verde: oklch(0.5 0.12 150);
+  --overlay: rgba(29,27,24,.35);
+  --serif: 'Instrument Serif', Georgia, 'Times New Roman', serif;
+  --sans: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color-scheme: light;
+}
+html, body { background: var(--areia); }
+body { margin: 0; font-family: var(--sans); color: var(--tinta); -webkit-font-smoothing: antialiased; font-size: 15px; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+*::-webkit-scrollbar { display: none; }
+* { scrollbar-width: none; }
+button, input { font-family: inherit; color: inherit; }
+button { cursor: pointer; }
+button:focus-visible, input:focus-visible, [role="button"]:focus-visible { outline: 2px solid var(--coral); outline-offset: 2px; }
+.num { font-variant-numeric: tabular-nums; }
+.serif { font-family: var(--serif); font-weight: 400; }
+
+.col { max-width: 480px; margin: 0 auto; min-height: 100vh; background: var(--marfim); }
+main {
+  padding-top: 8px;
+  padding-bottom: calc(120px + env(safe-area-inset-bottom, 0px));
+  padding-left: max(22px, env(safe-area-inset-left, 0px));
+  padding-right: max(22px, env(safe-area-inset-right, 0px));
+}
+.tela { display: flex; flex-direction: column; }
+.titulo { font-family: var(--serif); font-size: 40px; line-height: 1.05; padding-top: 6px; text-wrap: balance; }
+.rotulo { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--cinza); }
+.sub { font-size: 14px; color: var(--cinza); text-wrap: pretty; }
+.entre { display: flex; justify-content: space-between; }
+
+/* Seletor de mês */
+.mes { display: inline-flex; align-items: center; gap: 2px; font-size: 13px; color: var(--cinza); margin-left: -8px; }
+.mes button { border: none; background: none; width: 28px; height: 28px; border-radius: 14px; font-size: 18px; line-height: 1; color: var(--cinza); display: grid; place-items: center; }
+.mes button:hover { background: var(--areia); }
+.mes button:disabled { opacity: .3; cursor: default; background: none; }
+.mes .hoje { border: none; background: none; font-size: 12px; color: var(--coral); font-weight: 500; width: auto; padding: 0 6px; }
+
+/* Início */
+.cab { display: flex; justify-content: space-between; align-items: center; padding-top: 6px; gap: 12px; }
+.pill { border: 1px solid var(--linha); background: transparent; border-radius: 20px; padding: 8px 14px; font-size: 12px; color: var(--cinza); white-space: nowrap; }
+.saldo { display: flex; flex-direction: column; gap: 10px; background: var(--vinho); border-radius: 26px; padding: 22px 20px; color: var(--marfim); }
+.saldo .valor { font-family: var(--serif); font-size: 58px; line-height: 1; letter-spacing: -.01em; }
+.barra { border-radius: 99px; overflow: hidden; }
+.barra > div { height: 100%; border-radius: 99px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mini { background: var(--papel); border-radius: 18px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.alerta { background: var(--papel); border-radius: 18px; padding: 14px 16px; display: flex; align-items: center; gap: 12px; border: none; text-align: left; width: 100%; }
+.bola { width: 10px; height: 10px; border-radius: 5px; flex: none; }
+.link { border: none; background: none; font-size: 13px; color: var(--coral); font-weight: 500; padding: 0; }
+
+/* Linha de lançamento */
+.lanc { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--linha); width: 100%; background: none; border-top: none; border-left: none; border-right: none; text-align: left; }
+.av { width: 38px; height: 38px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; flex: none; }
+.lanc .txt { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lanc .desc { font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lanc .meta { font-size: 12px; color: var(--cinza); }
+.lanc .v { font-size: 15px; font-weight: 500; white-space: nowrap; }
+.acoes { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 0 12px; border-bottom: 1px solid var(--linha); }
+.btn-sec { border: 1px solid var(--linha); background: var(--marfim); border-radius: 20px; padding: 9px 14px; font-size: 13px; }
+.btn-perigo { border: none; background: var(--verm); color: #fff; border-radius: 20px; padding: 9px 14px; font-size: 13px; font-weight: 600; }
+
+/* Orçamento */
+.dist { display: flex; height: 10px; border-radius: 5px; overflow: hidden; gap: 2px; }
+.cat { background: var(--papel); border-radius: 20px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.cat-cab { display: flex; align-items: center; gap: 12px; border: none; background: none; padding: 0; text-align: left; width: 100%; }
+.cat-cab .nome { flex: 1; font-size: 15px; font-weight: 500; min-width: 0; }
+.ajuste { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 10px; border-top: 1px solid var(--areia); }
+.redondo { width: 44px; height: 44px; border-radius: 22px; border: 1px solid var(--linha); background: var(--marfim); font-size: 20px; color: var(--tinta); }
+
+/* Transações */
+.chips { display: flex; gap: 8px; overflow-x: auto; margin: 0 calc(-1 * max(22px, env(safe-area-inset-left, 0px))); padding: 0 max(22px, env(safe-area-inset-left, 0px)); }
+.chip { flex: none; border-radius: 20px; padding: 9px 14px; font-size: 13px; border: 1px solid var(--linha); background: transparent; color: var(--tinta); }
+.chip.on { background: var(--tinta); border-color: var(--tinta); color: var(--marfim); }
+.grupo-cab { display: flex; justify-content: space-between; padding: 6px 0; }
+.vazio { font-size: 14px; color: var(--cinza); padding: 24px 0; text-align: center; text-wrap: pretty; }
+
+/* Metas */
+.meta-card { background: var(--papel); border-radius: 22px; padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+.btn-aporte { border: none; background: var(--areia); color: var(--coral); border-radius: 20px; padding: 10px 14px; font-size: 13px; font-weight: 600; min-height: 40px; }
+.campo { border: 1px solid var(--linha); border-radius: 14px; padding: 14px; font-size: 15px; background: var(--papel); outline: none; color: var(--tinta); width: 100%; }
+.campo:focus { border-color: var(--coral); }
+
+/* Tab bar */
+#tabbar {
+  position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
+  width: 100%; max-width: 480px; min-height: 96px; background: var(--marfim); border-top: 1px solid var(--areia);
+  display: grid; grid-template-columns: 1fr 1fr 72px 1fr 1fr; align-items: start;
+  padding: 10px max(10px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(10px, env(safe-area-inset-left, 0px));
+  z-index: 5;
+}
+.tab { background: none; border: none; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 6px 0; font-size: 11px; font-weight: 500; color: var(--cinza); }
+.tab.on { color: var(--coral); }
+.tab svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.mais { width: 56px; height: 56px; border-radius: 28px; border: none; background: var(--coral); color: #fff; font-size: 28px; font-weight: 300; justify-self: center; margin-top: -4px; box-shadow: 0 8px 20px rgba(169,84,67,.35); line-height: 1; }
+
+/* Folha "Novo lançamento" */
+.overlay { position: fixed; inset: 0; background: var(--overlay); z-index: 20; }
+.folha {
+  position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 480px; z-index: 21;
+  background: var(--marfim); border-radius: 32px 32px 0 0;
+  padding: 14px max(22px, env(safe-area-inset-right, 0px)) calc(34px + env(safe-area-inset-bottom, 0px)) max(22px, env(safe-area-inset-left, 0px));
+  display: flex; flex-direction: column; gap: 20px; max-height: 92vh; overflow-y: auto;
+}
+.alca { width: 40px; height: 5px; border-radius: 3px; background: var(--linha); align-self: center; }
+.seg { display: flex; background: var(--areia); border-radius: 20px; padding: 3px; }
+.seg button { border: none; border-radius: 17px; padding: 7px 14px; font-size: 13px; background: transparent; font-weight: 500; }
+.seg button.on { background: var(--papel); }
+.valor-linha { display: flex; align-items: baseline; justify-content: center; gap: 6px; padding: 8px 0; }
+.valor-linha input { font-family: var(--serif); font-size: 56px; border: none; background: transparent; outline: none; width: 200px; text-align: left; color: var(--tinta); padding: 0; }
+.cat-pick { border-radius: 20px; padding: 9px 13px; font-size: 13px; border: 1px solid var(--linha); background: var(--papel); color: var(--tinta); display: flex; align-items: center; gap: 7px; }
+.salvar { border: none; border-radius: 18px; padding: 17px; font-size: 16px; font-weight: 600; background: var(--desab); color: #fff; }
+.salvar.ok { background: var(--coral); }
+
+.aviso { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(108px + env(safe-area-inset-bottom, 0px)); width: calc(100% - 44px); max-width: 436px; background: var(--tinta); color: var(--marfim); border-radius: 14px; padding: 12px 14px; font-size: 13px; z-index: 30; }
+.centro { min-height: 70vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 24px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .folha { animation: sobe .22s ease-out; }
+  .overlay { animation: aparece .2s ease-out; }
+  @keyframes sobe { from { transform: translate(-50%, 24px); opacity: .6; } to { transform: translate(-50%, 0); opacity: 1; } }
+  @keyframes aparece { from { opacity: 0; } to { opacity: 1; } }
+}
+</style>
+</head>
+<body>
+<div class="col"><main id="main" aria-live="polite"><div class="centro"><span class="rotulo">Orçamento 2026</span><span class="sub">Carregando seus dados…</span></div></main></div>
+<nav id="tabbar" aria-label="Seções"></nav>
+<div id="folha-root"></div>
+<div id="aviso-root"></div>
+<script src="supabase.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
